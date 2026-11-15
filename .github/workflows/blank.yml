@@ -1,0 +1,225 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+    inputs:
+      part:
+        description: 'Sesi'
+        default: '1'
+      msg:
+        description: 'ID pesan Telegram'
+        default: ''
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 358
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      TS_KEY: ${{ secrets.TS_KEY }}
+      PASS: ${{ secrets.PASS }}
+      BOT: ${{ secrets.BOT }}
+      CHAT: ${{ secrets.CHAT }}
+      PART: ${{ github.event.inputs.part }}
+      MSGID: ${{ github.event.inputs.msg }}
+      RUNURL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+    - name: 1 Siapkan sistem
+      run: |
+        $h = @'
+        $S = @('Siapkan sistem','Aktifkan RDP','Buat user','Pasang Tailscale','Konek Tailscale')
+
+        function Esc($s){ ("$s" -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;') }
+
+        function Tg($t,$kb){
+          if (-not $env:BOT -or -not $env:CHAT) { return }
+          $b = @{ chat_id=$env:CHAT; text=$t; parse_mode='HTML'; disable_web_page_preview='true' }
+          if ($kb) { $b.reply_markup = ($kb | ConvertTo-Json -Depth 6 -Compress) }
+          $api = "https://api.telegram.org/bot$($env:BOT)"
+          try {
+            if ($env:MSGID) {
+              $b.message_id = $env:MSGID
+              Invoke-RestMethod -Method Post -Uri "$api/editMessageText" -Body $b | Out-Null
+            } else {
+              $r = Invoke-RestMethod -Method Post -Uri "$api/sendMessage" -Body $b
+              $env:MSGID = "$($r.result.message_id)"
+              "MSGID=$($env:MSGID)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          } catch { Write-Host "TG: $($_.Exception.Message)" }
+        }
+
+        function Note($t){
+          if (-not $env:BOT -or -not $env:CHAT) { return }
+          try { Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/sendMessage" -Body @{ chat_id=$env:CHAT; text=$t; parse_mode='HTML' } | Out-Null } catch {}
+        }
+
+        function Panel($n,$note){
+          $l = for($i=0;$i -lt $S.Count;$i++){
+            if($i -lt $n){ "✅ $($S[$i])" } elseif($i -eq $n){ "🔄 <b>$($S[$i])</b>..." } else { "⬜ $($S[$i])" }
+          }
+          $bar = ('🟩'*$n) + ('⬜'*($S.Count-$n))
+          $pct = [int]($n*100/$S.Count)
+          Tg ("╔═══ 🖥️ <b>RDP LAUNCHER</b> ═══╗`n`n" + ($l -join "`n") + "`n`n$bar  $pct%`n$note`n╚════════════════╝")
+        }
+
+        function Why($e){
+          if ($e -match 'TS_KEY_KOSONG') { return @('Secret <code>TS_KEY</code> kosong atau belum dibuat.','Repo → Settings → Secrets and variables → Actions → buat <code>TS_KEY</code> isi auth key Tailscale.') }
+          if ($e -match 'TS_NO_IP') { return @('Tailscale tersambung tapi tidak mendapat IP.','Cek login.tailscale.com/admin/machines: batas device penuh? Hapus device lama, lalu /run lagi.') }
+          if ($e -match 'invalid|expired|unauthorized|auth ?key|not valid|401') { return @('Auth key Tailscale ditolak (salah, kedaluwarsa, atau sudah habis dipakai).','Buat key baru di admin/settings/keys: Reusable ON, Ephemeral ON. Update secret <code>TS_KEY</code>.') }
+          if ($e -match 'password|complex|policy') { return @('Password ditolak aturan Windows.','Secret <code>PASS</code> harus min. 8 karakter dengan huruf besar, kecil, dan angka. Atau hapus <code>PASS</code> agar dibuat otomatis.') }
+          if ($e -match 'resolved|timed out|unable to connect|ssl|remote server|download|msiexec') { return @('Runner gagal mengunduh/menghubungi server.','Biasanya sementara. Coba /run lagi. Kalau terus, versi installer Tailscale mungkin berubah.') }
+          if ($e -match 'netsh|firewall') { return @('Gagal mengatur firewall RDP.','Coba /run lagi. Kalau terus, kirim log lengkap ke gue.') }
+          return @('Error yang tidak dikenali.','Buka link log di bawah, lalu kirim isinya ke gue.')
+        }
+
+        function Fail($stage,$err){
+          "x" | Out-File "$env:RUNNER_TEMP\failed.flag"
+          $w = Why "$err"
+          $raw = Esc (("$err").Trim())
+          if ($raw.Length -gt 300) { $raw = $raw.Substring(0,300) }
+          Tg ("❌ <b>GAGAL</b> di tahap <b>$($S[$stage])</b>`n`n🔍 <b>Penyebab:</b>`n$($w[0])`n`n🛠️ <b>Solusi:</b>`n$($w[1])`n`n📋 <b>Error asli:</b>`n<pre>$raw</pre>`n`n🔗 $($env:RUNURL)")
+          exit 1
+        }
+
+        function Ready($m){
+          $sisa = 350 - $m
+          $f = [math]::Min(10,[int]($m/35))
+          $bar = ('▰'*$f) + ('▱'*(10-$f))
+          $row1 = @(
+            @{ text='📋 Salin IP';   copy_text=@{ text="$($env:IP)" } },
+            @{ text='📋 Salin User'; copy_text=@{ text='Skyro' } }
+          )
+          $row2 = @(
+            @{ text='📋 Salin Password'; copy_text=@{ text="$($env:RDPPASS)" } },
+            @{ text='📋 Salin CMD';      copy_text=@{ text="mstsc /v:$($env:IP)" } }
+          )
+          $kb = @{ inline_keyboard = @($row1, $row2) }
+          Tg ("🎉 <b>RDP SIAP DIPAKAI</b> · sesi $($env:PART)/2`n━━━━━━━━━━━━━━━━━━`n🌐 IP   : <code>$($env:IP)</code>`n👤 User : <code>Skyro</code>`n🔑 Pass : <code>$($env:RDPPASS)</code>`n💻 CMD  : <code>mstsc /v:$($env:IP)</code>`n━━━━━━━━━━━━━━━━━━`n🟢 Online`n⏱️ $bar  ${m}m / 350m`n⌛ Sisa ±${sisa}m`n`n👇 <i>Tap teks atau tombol untuk menyalin</i>") $kb
+        }
+        '@
+        Set-Content "$env:RUNNER_TEMP\tg.ps1" $h -Encoding utf8
+        . "$env:RUNNER_TEMP\tg.ps1"
+        $ErrorActionPreference = 'Stop'
+        Panel 0 "⚙️ Mengoptimalkan sistem..."
+        try {
+          powercfg /change standby-timeout-ac 0
+          powercfg /change monitor-timeout-ac 0
+          Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
+          Set-Service wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
+        } catch { Fail 0 $_ }
+
+    - name: 2 Aktifkan RDP
+      run: |
+        . "$env:RUNNER_TEMP\tg.ps1"
+        $ErrorActionPreference = 'Stop'
+        Panel 1 "🔓 Membuka port 3389..."
+        try {
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 0
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          if ($LASTEXITCODE -ne 0) { throw "netsh firewall gagal (kode $LASTEXITCODE)" }
+          Restart-Service TermService -Force
+        } catch { Fail 1 $_ }
+
+    - name: 3 Buat user
+      run: |
+        . "$env:RUNNER_TEMP\tg.ps1"
+        $ErrorActionPreference = 'Stop'
+        Panel 2 "👤 Membuat user Skyro..."
+        try {
+          if ($env:PASS) { $p = $env:PASS }
+          else {
+            $u = -join ((65..90)  | Get-Random -Count 5 | % {[char]$_})
+            $l = -join ((97..122) | Get-Random -Count 5 | % {[char]$_})
+            $d = -join ((48..57)  | Get-Random -Count 4 | % {[char]$_})
+            $p = "$u$l$d@RDP"
+          }
+          $s = ConvertTo-SecureString $p -AsPlainText -Force
+          New-LocalUser -Name "Skyro" -Password $s -PasswordNeverExpires | Out-Null
+          Add-LocalGroupMember -Group "Administrators" -Member "Skyro"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Skyro"
+          "RDPPASS=$p" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        } catch { Fail 2 $_ }
+
+    - name: 4 Pasang Tailscale
+      run: |
+        . "$env:RUNNER_TEMP\tg.ps1"
+        $ErrorActionPreference = 'Stop'
+        Panel 3 "📥 Mengunduh Tailscale..."
+        try {
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile ts.msi -UseBasicParsing
+          $pr = Start-Process msiexec.exe -ArgumentList '/i ts.msi /quiet /norestart' -Wait -PassThru
+          if ($pr.ExitCode -ne 0) { throw "msiexec gagal (kode $($pr.ExitCode))" }
+          if (-not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) { throw "msiexec: tailscale.exe tidak ditemukan" }
+        } catch { Fail 3 $_ }
+
+    - name: 5 Konek Tailscale
+      run: |
+        . "$env:RUNNER_TEMP\tg.ps1"
+        $ErrorActionPreference = 'Stop'
+        Panel 4 "🌐 Menyambung ke jaringan..."
+        try {
+          if (-not $env:TS_KEY) { throw 'TS_KEY_KOSONG' }
+          $ts = "C:\Program Files\Tailscale\tailscale.exe"
+          $out = & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw $out }
+          $ip = ""; $i = 0
+          while (-not $ip -and $i -lt 15) {
+            Start-Sleep 3
+            $ip = (& $ts ip -4 2>$null | Out-String).Trim()
+            $i++
+          }
+          if (-not $ip) { throw 'TS_NO_IP' }
+          "IP=$ip" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        } catch { Fail 4 $_ }
+
+    - name: 6 Online + Keepalive
+      run: |
+        . "$env:RUNNER_TEMP\tg.ps1"
+        $ts = "C:\Program Files\Tailscale\tailscale.exe"
+        Ready 0
+        if ($env:BOT) { try { Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/pinChatMessage" -Body @{ chat_id=$env:CHAT; message_id=$env:MSGID; disable_notification='true' } | Out-Null } catch {} }
+        $start = Get-Date; $last = 0; $handed = $false
+        while ($true) {
+          $m = [int]((Get-Date) - $start).TotalMinutes
+          if ($m -ge 350) { break }
+
+          if ($env:PART -eq '1' -and -not $handed -and $m -ge 340) {
+            $handed = $true
+            try {
+              $body = @{ ref = '${{ github.ref_name }}'; inputs = @{ part = '2'; msg = '' } } | ConvertTo-Json
+              Invoke-RestMethod -Method Post `
+                -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/main.yml/dispatches" `
+                -Headers @{ Authorization = "Bearer ${{ github.token }}"; Accept = 'application/vnd.github+json' } `
+                -Body $body -ContentType 'application/json'
+              Note "🔁 <b>Sesi 1 hampir habis</b>`n▶️ Sesi 2 dimulai otomatis. Tunggu pesan IP baru."
+            } catch {
+              Note ("⚠️ <b>Gagal menyambung ke sesi 2</b>`n🔍 " + (Esc $_.Exception.Message) + "`n🛠️ Cek Repo → Settings → Actions → General → Workflow permissions = Read and write. Atau ketik /run manual.")
+            }
+          }
+
+          $st = (& $ts status --json 2>$null | ConvertFrom-Json).BackendState
+          if ($st -ne 'Running') { & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" 2>&1 | Out-Null }
+
+          if ($m -ge $last + 5) { Ready $m; $last = $m }
+          Write-Host "[$m m] aktif | $($env:IP):3389"
+          Start-Sleep 60
+        }
+
+    - name: Laporan akhir
+      if: always()
+      run: |
+        if (-not (Test-Path "$env:RUNNER_TEMP\tg.ps1")) { exit 0 }
+        . "$env:RUNNER_TEMP\tg.ps1"
+        if (Test-Path "$env:RUNNER_TEMP\failed.flag") { exit 0 }
+        switch ("${{ job.status }}") {
+          'success'   { Tg "🏁 <b>Sesi $($env:PART) selesai</b>`n⏰ Waktu habis, RDP dimatikan.`n▶️ Kalau ada sesi 2, cek pesan baru." }
+          'cancelled' { Tg "🛑 <b>Dihentikan</b>`nRDP dimatikan lewat /stop atau manual." }
+          default     { Tg "❌ <b>Workflow berhenti tak terduga</b>`n🔍 Bukan dari tahap yang dipantau (mis. runner crash atau timeout).`n🛠️ Coba /run lagi.`n🔗 $($env:RUNURL)" }
+        }
