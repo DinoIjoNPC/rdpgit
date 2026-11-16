@@ -167,7 +167,7 @@ jobs:
         try {
           if (-not $env:TS_KEY) { throw 'TS_KEY_KOSONG' }
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
-          $out = & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" 2>&1 | Out-String
+          $out = & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) { throw $out }
           $ip = ""; $i = 0
           while (-not $ip -and $i -lt 15) {
@@ -205,7 +205,7 @@ jobs:
           }
 
           $st = (& $ts status --json 2>$null | ConvertFrom-Json).BackendState
-          if ($st -ne 'Running') { & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" 2>&1 | Out-Null }
+          if ($st -ne 'Running') { & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp 2>&1 | Out-Null }
 
           if ($m -ge $last + 5) { Ready $m; $last = $m }
           Write-Host "[$m m] aktif | $($env:IP):3389"
