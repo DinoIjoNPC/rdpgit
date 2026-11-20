@@ -1,3 +1,4 @@
+
 name: RDP
 
 on:
@@ -70,13 +71,15 @@ jobs:
         }
 
         function Why($e){
+          if ($e -match 'PASS_SECRET_MISSING') { return @('Secret <code>PASS</code> belum dibuat atau kosong.','Buka Repo → Settings → Secrets and variables → Actions. Buat secret bernama <code>PASS</code>, lalu jalankan /run lagi.') }
+          if ($e -match 'PASS_POLICY_INVALID') { return @('Password tidak memenuhi syarat.','Gunakan minimal 8 karakter yang memiliki huruf besar, huruf kecil, dan angka. Simpan di secret <code>PASS</code>.') }
           if ($e -match 'TS_KEY_KOSONG') { return @('Secret <code>TS_KEY</code> kosong atau belum dibuat.','Repo → Settings → Secrets and variables → Actions → buat <code>TS_KEY</code> isi auth key Tailscale.') }
-          if ($e -match 'TS_NO_IP') { return @('Tailscale tersambung tapi tidak mendapat IP.','Cek login.tailscale.com/admin/machines: batas device penuh? Hapus device lama, lalu /run lagi.') }
-          if ($e -match 'invalid|expired|unauthorized|auth ?key|not valid|401') { return @('Auth key Tailscale ditolak (salah, kedaluwarsa, atau sudah habis dipakai).','Buat key baru di admin/settings/keys: Reusable ON, Ephemeral ON. Update secret <code>TS_KEY</code>.') }
-          if ($e -match 'password|complex|policy') { return @('Password ditolak aturan Windows.','Secret <code>PASS</code> harus min. 8 karakter dengan huruf besar, kecil, dan angka. Atau hapus <code>PASS</code> agar dibuat otomatis.') }
-          if ($e -match 'resolved|timed out|unable to connect|ssl|remote server|download|msiexec') { return @('Runner gagal mengunduh/menghubungi server.','Biasanya sementara. Coba /run lagi. Kalau terus, versi installer Tailscale mungkin berubah.') }
-          if ($e -match 'netsh|firewall') { return @('Gagal mengatur firewall RDP.','Coba /run lagi. Kalau terus, kirim log lengkap ke gue.') }
-          return @('Error yang tidak dikenali.','Buka link log di bawah, lalu kirim isinya ke gue.')
+          if ($e -match 'TS_NO_IP') { return @('Tailscale tersambung tapi tidak mendapat IP.','Cek Tailscale Admin Console: batas device penuh? Hapus device lama, lalu /run lagi.') }
+          if ($e -match 'invalid|expired|unauthorized|auth ?key|not valid|401') { return @('Auth key Tailscale ditolak (salah, kedaluwarsa, atau sudah habis dipakai).','Buat key baru di Tailscale Admin → Settings → Keys. Update secret <code>TS_KEY</code>.') }
+          if ($e -match 'password|complex|policy') { return @('Password ditolak aturan Windows.','Periksa secret <code>PASS</code>. Gunakan minimal 8 karakter dengan huruf besar, kecil, dan angka.') }
+          if ($e -match 'resolved|timed out|unable to connect|ssl|remote server|download|msiexec') { return @('Runner gagal mengunduh atau menghubungi server.','Coba /run lagi. Jika terus terjadi, periksa log Actions.') }
+          if ($e -match 'netsh|firewall') { return @('Gagal mengatur firewall RDP.','Coba /run lagi. Periksa log Actions jika masih gagal.') }
+          return @('Error yang tidak dikenali.','Buka link log di bawah dan periksa pesan error lengkap.')
         }
 
         function Fail($stage,$err){
@@ -93,21 +96,35 @@ jobs:
           $f = [math]::Min(10,[int]($m/35))
           $bar = ('▰'*$f) + ('▱'*(10-$f))
           $row1 = @(
-            @{ text='📋 Salin IP';   copy_text=@{ text="$($env:IP)" } },
+            @{ text='📋 Salin IP'; copy_text=@{ text="$($env:IP)" } },
             @{ text='📋 Salin User'; copy_text=@{ text='Skyro' } }
           )
           $row2 = @(
             @{ text='📋 Salin Password'; copy_text=@{ text="$($env:RDPPASS)" } },
-            @{ text='📋 Salin CMD';      copy_text=@{ text="mstsc /v:$($env:IP)" } }
+            @{ text='📋 Salin CMD'; copy_text=@{ text="mstsc /v:$($env:IP)" } }
           )
           $kb = @{ inline_keyboard = @($row1, $row2) }
           Tg ("🎉 <b>RDP SIAP DIPAKAI</b> · sesi $($env:PART)/2`n━━━━━━━━━━━━━━━━━━`n🌐 IP   : <code>$($env:IP)</code>`n👤 User : <code>Skyro</code>`n🔑 Pass : <code>$($env:RDPPASS)</code>`n💻 CMD  : <code>mstsc /v:$($env:IP)</code>`n━━━━━━━━━━━━━━━━━━`n🟢 Online`n⏱️ $bar  ${m}m / 350m`n⌛ Sisa ±${sisa}m`n`n👇 <i>Tap teks atau tombol untuk menyalin</i>") $kb
         }
         '@
+
         Set-Content "$env:RUNNER_TEMP\tg.ps1" $h -Encoding utf8
         . "$env:RUNNER_TEMP\tg.ps1"
         $ErrorActionPreference = 'Stop'
-        Panel 0 "⚙️ Mengoptimalkan sistem..."
+
+        Panel 0 "⚙️ Memvalidasi konfigurasi..."
+
+        if ([string]::IsNullOrWhiteSpace($env:PASS)) {
+          Fail 0 'PASS_SECRET_MISSING'
+        }
+
+        if ($env:PASS.Length -lt 8 -or
+            $env:PASS -cnotmatch '[A-Z]' -or
+            $env:PASS -cnotmatch '[a-z]' -or
+            $env:PASS -notmatch '[0-9]') {
+          Fail 0 'PASS_POLICY_INVALID'
+        }
+
         try {
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
@@ -133,13 +150,7 @@ jobs:
         $ErrorActionPreference = 'Stop'
         Panel 2 "👤 Membuat user Skyro..."
         try {
-          if ($env:PASS) { $p = $env:PASS }
-          else {
-            $u = -join ((65..90)  | Get-Random -Count 5 | % {[char]$_})
-            $l = -join ((97..122) | Get-Random -Count 5 | % {[char]$_})
-            $d = -join ((48..57)  | Get-Random -Count 4 | % {[char]$_})
-            $p = "$u$l$d@RDP"
-          }
+          $p = $env:PASS
           $s = ConvertTo-SecureString $p -AsPlainText -Force
           New-LocalUser -Name "Skyro" -Password $s -PasswordNeverExpires | Out-Null
           Add-LocalGroupMember -Group "Administrators" -Member "Skyro"
@@ -167,7 +178,7 @@ jobs:
         try {
           if (-not $env:TS_KEY) { throw 'TS_KEY_KOSONG' }
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
-          $out = & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp --advertise-tags=tag:rdp --advertise-tags=tag:rdp 2>&1 | Out-String
+          $out = & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) { throw $out }
           $ip = ""; $i = 0
           while (-not $ip -and $i -lt 15) {
@@ -205,7 +216,9 @@ jobs:
           }
 
           $st = (& $ts status --json 2>$null | ConvertFrom-Json).BackendState
-          if ($st -ne 'Running') { & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp --advertise-tags=tag:rdp --advertise-tags=tag:rdp 2>&1 | Out-Null }
+          if ($st -ne 'Running') {
+            & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp 2>&1 | Out-Null
+          }
 
           if ($m -ge $last + 5) { Ready $m; $last = $m }
           Write-Host "[$m m] aktif | $($env:IP):3389"
