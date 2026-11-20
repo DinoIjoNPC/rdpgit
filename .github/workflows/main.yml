@@ -80,7 +80,7 @@ jobs:
             return @('Secret <code>PASS</code> belum dibuat atau kosong.','Buka Repo → Settings → Secrets and variables → Actions. Buat secret bernama <code>PASS</code>, lalu jalankan /run lagi.')
           }
           if ($e -match 'PASS_POLICY_INVALID') {
-            return @('Password tidak memenuhi syarat.','Gunakan 8–64 karakter, huruf besar, huruf kecil, angka, simbol, dan tanpa spasi. Simpan di secret <code>PASS</code>.')
+            return @('Password tidak memenuhi syarat.','Gunakan password minimal 8 dan maksimal 128 karakter. Tidak wajib kombinasi huruf besar, huruf kecil, angka, atau simbol. Simpan di secret <code>PASS</code>.')
           }
           if ($e -match 'TS_KEY_KOSONG') {
             return @('Secret <code>TS_KEY</code> kosong atau belum dibuat.','Repo → Settings → Secrets and variables → Actions → buat <code>TS_KEY</code> isi auth key Tailscale.')
@@ -146,13 +146,9 @@ jobs:
           Fail 0 'PASS_SECRET_MISSING'
         }
 
+        # Password: 8–128 karakter, tanpa syarat komposisi.
         if ($env:PASS.Length -lt 8 -or
-            $env:PASS.Length -gt 64 -or
-            $env:PASS -match '\s' -or
-            $env:PASS -cnotmatch '[A-Z]' -or
-            $env:PASS -cnotmatch '[a-z]' -or
-            $env:PASS -notmatch '[0-9]' -or
-            $env:PASS -notmatch '[^A-Za-z0-9]') {
+            $env:PASS.Length -gt 128) {
           Fail 0 'PASS_POLICY_INVALID'
         }
 
