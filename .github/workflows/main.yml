@@ -27,6 +27,7 @@ jobs:
       PASS: ${{ secrets.PASS }}
       BOT: ${{ secrets.BOT }}
       CHAT: ${{ secrets.CHAT }}
+      GH_TOKEN: ${{ github.token }}
       PART: ${{ github.event.inputs.part }}
       MSGID: ${{ github.event.inputs.msg }}
       RUNURL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -53,17 +54,21 @@ jobs:
               $env:MSGID = "$($r.result.message_id)"
               "MSGID=$($env:MSGID)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
             }
-          } catch { Write-Host "TG: $($_.Exception.Message)" }
+          } catch { Write-Host "Telegram notification unavailable." }
         }
 
         function Note($t){
           if (-not $env:BOT -or -not $env:CHAT) { return }
-          try { Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/sendMessage" -Body @{ chat_id=$env:CHAT; text=$t; parse_mode='HTML' } | Out-Null } catch {}
+          try {
+            Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/sendMessage" -Body @{ chat_id=$env:CHAT; text=$t; parse_mode='HTML' } | Out-Null
+          } catch {}
         }
 
         function Panel($n,$note){
           $l = for($i=0;$i -lt $S.Count;$i++){
-            if($i -lt $n){ "✅ $($S[$i])" } elseif($i -eq $n){ "🔄 <b>$($S[$i])</b>..." } else { "▱ $($S[$i])" }
+            if($i -lt $n){ "✅ $($S[$i])" }
+            elseif($i -eq $n){ "🔄 <b>$($S[$i])</b>..." }
+            else { "▱ $($S[$i])" }
           }
           $bar = ('▰'*$n) + ('▱'*($S.Count-$n))
           $pct = [int]($n*100/$S.Count)
@@ -71,23 +76,45 @@ jobs:
         }
 
         function Why($e){
-          if ($e -match 'PASS_SECRET_MISSING') { return @('Secret <code>PASS</code> belum dibuat atau kosong.','Buka Repo → Settings → Secrets and variables → Actions. Buat secret bernama <code>PASS</code>, lalu jalankan /run lagi.') }
-          if ($e -match 'PASS_POLICY_INVALID') { return @('Password tidak memenuhi syarat.','Gunakan minimal 8 karakter yang memiliki huruf besar, huruf kecil, dan angka. Simpan di secret <code>PASS</code>.') }
-          if ($e -match 'TS_KEY_KOSONG') { return @('Secret <code>TS_KEY</code> kosong atau belum dibuat.','Repo → Settings → Secrets and variables → Actions → buat <code>TS_KEY</code> isi auth key Tailscale.') }
-          if ($e -match 'TS_NO_IP') { return @('Tailscale tersambung tapi tidak mendapat IP.','Cek Tailscale Admin Console: batas device penuh? Hapus device lama, lalu /run lagi.') }
-          if ($e -match 'invalid|expired|unauthorized|auth ?key|not valid|401') { return @('Auth key Tailscale ditolak (salah, kedaluwarsa, atau sudah habis dipakai).','Buat key baru di Tailscale Admin → Settings → Keys. Update secret <code>TS_KEY</code>.') }
-          if ($e -match 'password|complex|policy') { return @('Password ditolak aturan Windows.','Periksa secret <code>PASS</code>. Gunakan minimal 8 karakter dengan huruf besar, kecil, dan angka.') }
-          if ($e -match 'resolved|timed out|unable to connect|ssl|remote server|download|msiexec') { return @('Runner gagal mengunduh atau menghubungi server.','Coba /run lagi. Jika terus terjadi, periksa log Actions.') }
-          if ($e -match 'netsh|firewall') { return @('Gagal mengatur firewall RDP.','Coba /run lagi. Periksa log Actions jika masih gagal.') }
-          return @('Error yang tidak dikenali.','Buka link log di bawah dan periksa pesan error lengkap.')
+          if ($e -match 'PASS_SECRET_MISSING') {
+            return @('Secret <code>PASS</code> belum dibuat atau kosong.','Buka Repo → Settings → Secrets and variables → Actions. Buat secret bernama <code>PASS</code>, lalu jalankan /run lagi.')
+          }
+          if ($e -match 'PASS_POLICY_INVALID') {
+            return @('Password tidak memenuhi syarat.','Gunakan 8–64 karakter, huruf besar, huruf kecil, angka, simbol, dan tanpa spasi. Simpan di secret <code>PASS</code>.')
+          }
+          if ($e -match 'TS_KEY_KOSONG') {
+            return @('Secret <code>TS_KEY</code> kosong atau belum dibuat.','Repo → Settings → Secrets and variables → Actions → buat <code>TS_KEY</code> isi auth key Tailscale.')
+          }
+          if ($e -match 'TS_NO_IP') {
+            return @('Tailscale tersambung tapi tidak mendapat IP.','Cek Tailscale Admin Console dan batas device.')
+          }
+          if ($e -match 'invalid|expired|unauthorized|auth ?key|not valid|401') {
+            return @('Auth key Tailscale ditolak.','Buat key baru di Tailscale Admin → Settings → Keys. Update secret <code>TS_KEY</code>.')
+          }
+          if ($e -match 'password|complex|policy') {
+            return @('Password ditolak aturan Windows.','Periksa secret <code>PASS</code> dan persyaratan password.')
+          }
+          if ($e -match 'resolved|timed out|unable to connect|ssl|remote server|download|msiexec') {
+            return @('Runner gagal mengunduh atau menghubungi server.','Coba /run lagi dan periksa log Actions.')
+          }
+          if ($e -match 'netsh|firewall') {
+            return @('Gagal mengatur firewall RDP.','Periksa log Actions.')
+          }
+          return @('Error yang tidak dikenali.','Buka link log Actions untuk pemeriksaan lebih lanjut.')
         }
 
         function Fail($stage,$err){
           "x" | Out-File "$env:RUNNER_TEMP\failed.flag"
           $w = Why "$err"
-          $raw = Esc (("$err").Trim())
+          $raw = "$err"
+          foreach ($secret in @($env:PASS,$env:TS_KEY,$env:BOT)) {
+            if (-not [string]::IsNullOrEmpty($secret)) {
+              $raw = $raw.Replace($secret,'[REDACTED]')
+            }
+          }
+          $raw = Esc $raw.Trim()
           if ($raw.Length -gt 300) { $raw = $raw.Substring(0,300) }
-          Tg ("❌ <b>GAGAL</b> di tahap <b>$($S[$stage])</b>`n`n🔍 <b>Penyebab:</b>`n$($w[0])`n`n🛠️ <b>Solusi:</b>`n$($w[1])`n`n📋 <b>Error asli:</b>`n<pre>$raw</pre>`n`n🔗 $($env:RUNURL)")
+          Tg ("❌ <b>GAGAL</b> di tahap <b>$($S[$stage])</b>`n`n🔍 <b>Penyebab:</b>`n$($w[0])`n`n🛠️ <b>Solusi:</b>`n$($w[1])`n`n📋 <b>Error:</b>`n<pre>$raw</pre>`n`n🔗 $($env:RUNURL)")
           exit 1
         }
 
@@ -95,16 +122,17 @@ jobs:
           $sisa = 350 - $m
           $f = [math]::Min(10,[int]($m/35))
           $bar = ('▰'*$f) + ('▱'*(10-$f))
+
           $row1 = @(
             @{ text='📋 Salin IP'; copy_text=@{ text="$($env:IP)" } },
             @{ text='📋 Salin User'; copy_text=@{ text='Skyro' } }
           )
           $row2 = @(
-            @{ text='📋 Salin Password'; copy_text=@{ text="$($env:RDPPASS)" } },
             @{ text='📋 Salin CMD'; copy_text=@{ text="mstsc /v:$($env:IP)" } }
           )
           $kb = @{ inline_keyboard = @($row1, $row2) }
-          Tg ("<b>DINO RDP</b> <code>SESSION ONLINE</code> · part $($env:PART)/2`n━━━━━━━━━━━━━━━━━━`n🌐 IP   : <code>$($env:IP)</code>`n👤 User : <code>Skyro</code>`n🔑 Pass : <code>$($env:RDPPASS)</code>`n💻 CMD  : <code>mstsc /v:$($env:IP)</code>`n━━━━━━━━━━━━━━━━━━`n🟢 Online`n⏱️ $bar  ${m}m / 350m`n⌛ Sisa ±${sisa}m`n`n👇 <i>Tap teks atau tombol untuk menyalin</i>") $kb
+
+          Tg ("<b>DINO RDP</b> <code>SESSION ONLINE</code> · part $($env:PART)/2`n━━━━━━━━━━━━━━━━━━`n🌐 IP : <code>$($env:IP)</code>`n👤 User : <code>Skyro</code>`n🔐 Password: <i>tidak ditampilkan melalui notifikasi</i>`n💻 CMD : <code>mstsc /v:$($env:IP)</code>`n━━━━━━━━━━━━━━━━━━`n🟢 Online`n⏱️ $bar ${m}m / 350m`n⌛ Sisa ±${sisa}m`n`n👇 <i>Gunakan tombol untuk menyalin</i>") $kb
         }
         '@
 
@@ -119,9 +147,12 @@ jobs:
         }
 
         if ($env:PASS.Length -lt 8 -or
+            $env:PASS.Length -gt 64 -or
+            $env:PASS -match '\s' -or
             $env:PASS -cnotmatch '[A-Z]' -or
             $env:PASS -cnotmatch '[a-z]' -or
-            $env:PASS -notmatch '[0-9]') {
+            $env:PASS -notmatch '[0-9]' -or
+            $env:PASS -notmatch '[^A-Za-z0-9]') {
           Fail 0 'PASS_POLICY_INVALID'
         }
 
@@ -150,12 +181,10 @@ jobs:
         $ErrorActionPreference = 'Stop'
         Panel 2 "👤 Membuat user Skyro..."
         try {
-          $p = $env:PASS
-          $s = ConvertTo-SecureString $p -AsPlainText -Force
+          $s = ConvertTo-SecureString $env:PASS -AsPlainText -Force
           New-LocalUser -Name "Skyro" -Password $s -PasswordNeverExpires | Out-Null
           Add-LocalGroupMember -Group "Administrators" -Member "Skyro"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Skyro"
-          "RDPPASS=$p" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
         } catch { Fail 2 $_ }
 
     - name: 4 Pasang Tailscale
@@ -167,7 +196,9 @@ jobs:
           Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-amd64.msi" -OutFile ts.msi -UseBasicParsing
           $pr = Start-Process msiexec.exe -ArgumentList '/i ts.msi /quiet /norestart' -Wait -PassThru
           if ($pr.ExitCode -ne 0) { throw "msiexec gagal (kode $($pr.ExitCode))" }
-          if (-not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) { throw "msiexec: tailscale.exe tidak ditemukan" }
+          if (-not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) {
+            throw "tailscale.exe tidak ditemukan"
+          }
         } catch { Fail 3 $_ }
 
     - name: 5 Konek Tailscale
@@ -180,7 +211,9 @@ jobs:
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           $out = & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) { throw $out }
-          $ip = ""; $i = 0
+
+          $ip = ""
+          $i = 0
           while (-not $ip -and $i -lt 15) {
             Start-Sleep 3
             $ip = (& $ts ip -4 2>$null | Out-String).Trim()
@@ -195,8 +228,21 @@ jobs:
         . "$env:RUNNER_TEMP\tg.ps1"
         $ts = "C:\Program Files\Tailscale\tailscale.exe"
         Ready 0
-        if ($env:BOT) { try { Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/pinChatMessage" -Body @{ chat_id=$env:CHAT; message_id=$env:MSGID; disable_notification='true' } | Out-Null } catch {} }
-        $start = Get-Date; $last = 0; $handed = $false
+
+        if ($env:BOT -and $env:CHAT -and $env:MSGID) {
+          try {
+            Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/pinChatMessage" -Body @{
+              chat_id=$env:CHAT
+              message_id=$env:MSGID
+              disable_notification='true'
+            } | Out-Null
+          } catch {}
+        }
+
+        $start = Get-Date
+        $last = 0
+        $handed = $false
+
         while ($true) {
           $m = [int]((Get-Date) - $start).TotalMinutes
           if ($m -ge 350) { break }
@@ -204,14 +250,22 @@ jobs:
           if ($env:PART -eq '1' -and -not $handed -and $m -ge 340) {
             $handed = $true
             try {
-              $body = @{ ref = '${{ github.ref_name }}'; inputs = @{ part = '2'; msg = '' } } | ConvertTo-Json
+              $body = @{
+                ref = '${{ github.ref_name }}'
+                inputs = @{ part = '2'; msg = '' }
+              } | ConvertTo-Json
+
               Invoke-RestMethod -Method Post `
                 -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/main.yml/dispatches" `
-                -Headers @{ Authorization = "Bearer ${{ github.token }}"; Accept = 'application/vnd.github+json' } `
+                -Headers @{
+                  Authorization = "Bearer $env:GH_TOKEN"
+                  Accept = 'application/vnd.github+json'
+                } `
                 -Body $body -ContentType 'application/json'
-              Note "🔁 <b>Sesi 1 hampir habis</b>`n▶️ Sesi 2 dimulai otomatis. Tunggu pesan IP baru."
+
+              Note "🔁 <b>Sesi 1 hampir habis</b>`n▶️ Sesi 2 dimulai otomatis."
             } catch {
-              Note ("⚠️ <b>Gagal menyambung ke sesi 2</b>`n🔍 " + (Esc $_.Exception.Message) + "`n🛠️ Cek Repo → Settings → Actions → General → Workflow permissions = Read and write. Atau ketik /run manual.")
+              Note "⚠️ <b>Gagal memulai sesi 2 otomatis.</b> Jalankan /run secara manual."
             }
           }
 
@@ -220,8 +274,12 @@ jobs:
             & $ts up --authkey=$env:TS_KEY --hostname="rdp-$env:PART" --advertise-tags=tag:rdp 2>&1 | Out-Null
           }
 
-          if ($m -ge $last + 5) { Ready $m; $last = $m }
-          Write-Host "[$m m] aktif | $($env:IP):3389"
+          if ($m -ge $last + 5) {
+            Ready $m
+            $last = $m
+          }
+
+          Write-Host "[$m m] sesi aktif."
           Start-Sleep 60
         }
 
@@ -230,14 +288,26 @@ jobs:
       run: |
         if (-not (Test-Path "$env:RUNNER_TEMP\tg.ps1")) { exit 0 }
         . "$env:RUNNER_TEMP\tg.ps1"
+
         if ($env:BOT -and $env:CHAT -and $env:MSGID) {
           try {
-            Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/unpinChatMessage" -Body @{ chat_id=$env:CHAT; message_id=$env:MSGID } | Out-Null
-          } catch { Write-Host "TG unpin: $($_.Exception.Message)" }
+            Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$($env:BOT)/unpinChatMessage" -Body @{
+              chat_id=$env:CHAT
+              message_id=$env:MSGID
+            } | Out-Null
+          } catch {}
         }
+
         if (Test-Path "$env:RUNNER_TEMP\failed.flag") { exit 0 }
+
         switch ("${{ job.status }}") {
-          'success'   { Tg "🏁 <b>Sesi $($env:PART) selesai</b>`n⏰ Waktu habis, RDP dimatikan.`n▶️ Kalau ada sesi 2, cek pesan baru." }
-          'cancelled' { Tg "🛑 <b>Dihentikan</b>`nRDP dimatikan lewat /stop atau manual." }
-          default     { Tg "❌ <b>Workflow berhenti tak terduga</b>`n🔍 Bukan dari tahap yang dipantau (mis. runner crash atau timeout).`n🛠️ Coba /run lagi.`n🔗 $($env:RUNURL)" }
+          'success' {
+            Tg "🏁 <b>Sesi $($env:PART) selesai</b>`n⏰ Waktu habis, RDP dimatikan."
+          }
+          'cancelled' {
+            Tg "🛑 <b>Dihentikan</b>`nRDP dimatikan."
+          }
+          default {
+            Tg "❌ <b>Workflow berhenti tak terduga</b>`n🔍 Periksa log Actions.`n🔗 $($env:RUNURL)"
+          }
         }
