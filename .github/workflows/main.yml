@@ -63,11 +63,11 @@ jobs:
 
         function Panel($n,$note){
           $l = for($i=0;$i -lt $S.Count;$i++){
-            if($i -lt $n){ "✅ $($S[$i])" } elseif($i -eq $n){ "🔄 <b>$($S[$i])</b>..." } else { "⬜ $($S[$i])" }
+            if($i -lt $n){ "✅ $($S[$i])" } elseif($i -eq $n){ "🔄 <b>$($S[$i])</b>..." } else { "▱ $($S[$i])" }
           }
-          $bar = ('🟩'*$n) + ('⬜'*($S.Count-$n))
+          $bar = ('▰'*$n) + ('▱'*($S.Count-$n))
           $pct = [int]($n*100/$S.Count)
-          Tg ("╔═══ 🖥️ <b>RDP LAUNCHER</b> ═══╗`n`n" + ($l -join "`n") + "`n`n$bar  $pct%`n$note`n╚════════════════╝")
+          Tg ("<b>DINO RDP</b> · <code>INITIALIZING</code>`n`n" + ($l -join "`n") + "`n`n$bar  $pct%`n$note`n━━━━━━━━━━━━━━━━━━")
         }
 
         function Why($e){
@@ -104,7 +104,7 @@ jobs:
             @{ text='📋 Salin CMD'; copy_text=@{ text="mstsc /v:$($env:IP)" } }
           )
           $kb = @{ inline_keyboard = @($row1, $row2) }
-          Tg ("🎉 <b>RDP SIAP DIPAKAI</b> · sesi $($env:PART)/2`n━━━━━━━━━━━━━━━━━━`n🌐 IP   : <code>$($env:IP)</code>`n👤 User : <code>Skyro</code>`n🔑 Pass : <code>$($env:RDPPASS)</code>`n💻 CMD  : <code>mstsc /v:$($env:IP)</code>`n━━━━━━━━━━━━━━━━━━`n🟢 Online`n⏱️ $bar  ${m}m / 350m`n⌛ Sisa ±${sisa}m`n`n👇 <i>Tap teks atau tombol untuk menyalin</i>") $kb
+          Tg ("<b>DINO RDP</b> <code>SESSION ONLINE</code> · part $($env:PART)/2`n━━━━━━━━━━━━━━━━━━`n🌐 IP   : <code>$($env:IP)</code>`n👤 User : <code>Skyro</code>`n🔑 Pass : <code>$($env:RDPPASS)</code>`n💻 CMD  : <code>mstsc /v:$($env:IP)</code>`n━━━━━━━━━━━━━━━━━━`n🟢 Online`n⏱️ $bar  ${m}m / 350m`n⌛ Sisa ±${sisa}m`n`n👇 <i>Tap teks atau tombol untuk menyalin</i>") $kb
         }
         '@
 
@@ -139,7 +139,7 @@ jobs:
         Panel 1 "🔓 Membuka port 3389..."
         try {
           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 0
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10
           if ($LASTEXITCODE -ne 0) { throw "netsh firewall gagal (kode $LASTEXITCODE)" }
           Restart-Service TermService -Force
         } catch { Fail 1 $_ }
@@ -164,7 +164,7 @@ jobs:
         $ErrorActionPreference = 'Stop'
         Panel 3 "📥 Mengunduh Tailscale..."
         try {
-          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile ts.msi -UseBasicParsing
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-amd64.msi" -OutFile ts.msi -UseBasicParsing
           $pr = Start-Process msiexec.exe -ArgumentList '/i ts.msi /quiet /norestart' -Wait -PassThru
           if ($pr.ExitCode -ne 0) { throw "msiexec gagal (kode $($pr.ExitCode))" }
           if (-not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) { throw "msiexec: tailscale.exe tidak ditemukan" }
